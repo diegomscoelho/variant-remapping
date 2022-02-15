@@ -209,28 +209,37 @@ process outputStats {
  */
 process combineUnmappedVCF {
     input:
-        path "variants1.vcf"
-        path "variants2.vcf"
+        path "variants1.vcf.gz"
+        path "variants2.vcf.gz"
 
     output:
-        path "merge.vcf", emit: merge_vcf
+        path "merge.vcf.gz", emit: merge_vcf
 
     """
-    cat variants1.vcf variants2.vcf > merge.vcf
+    set -euxo pipefail
+    if ![ -s variants1.vcf.gz && -s variants.vcf.gz ];
+        echo NULL > merged.vcf.gz
+    elif ![ -s variants1.vcf.gz ];
+        cp variants2.vcf.gz merged.vcf.gz
+    elif ![ -s variants2.vcf.gz ];
+        cp variants1.vcf.gz merged.vcf.gz
+    else
+        bcftools concat variants1.vcf.gz variants2.vcf.gz -Oz -o merge.vcf.gz
+    fi
     """
 }
 
 
 process combineVCF {
     input:
-        path "variants1.vcf"
-        path "variants2.vcf"
-        path "variants3.vcf"
+        path "variants1.vcf.gz"
+        path "variants2.vcf.gz"
+        path "variants3.vcf.gz"
     output:
-        path "merge.vcf", emit: merge_vcf
+        path "merge.vcf.gz", emit: merge_vcf
 
     """
-    cat variants1.vcf variants2.vcf variants3.vcf > merge.vcf
+    bcftools concat variants1.vcf.gz variants2.vcf.gz variants3.vcf.gz > merge.vcf.gz
     """
 }
 
