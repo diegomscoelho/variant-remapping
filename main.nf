@@ -53,16 +53,18 @@ process filterInputVCF {
         path "genome_fai"
 
     output:
-        path "filtered.vcf", emit: filtered_vcf_file
-        path "kept.vcf", emit: kept_vcf_file
+        path "filtered.vcf.gz", emit: filtered_vcf_file
+        path "kept.vcf.gz", emit: kept_vcf_file
         path "count.yml", emit: count_yml
 
     script:
     """
     awk '{ print \$1"\\t1\\t"\$2-1;}' genome_fai > center_regions.bed
     awk '{ print \$1"\\t0\\t1"; print \$1"\\t"\$2-1"\\t"\$2;}' genome_fai > edge_regions.bed
-    bcftools filter --targets-file center_regions.bed source.vcf | tee kept.vcf |  grep -v '^#' | wc -l > all_count.txt
-    bcftools filter --targets-file edge_regions.bed  source.vcf | grep -v '^#' | tee filtered.vcf | wc -l > filtered_count.txt
+    bcftools filter --targets-file center_regions.bed -Oz -o kept.vcf.gz source.vcf
+    zcat kept.vcf.gz | grep -v '^#' | wc -l > all_count.txt
+    bcftools filter --targets-file edge_regions.bed -Oz -o filtered.vcf.gz source.vcf
+    zcat filtered.vcf.gz | grep -v '^#' | wc -l > filtered_count.txt
     cat <(cat *_count.txt | awk '{sum += \$1} END{print "all: "sum}') <(cat filtered_count.txt | awk '{print "filtered: "\$1}') > count.yml
     """
 }
