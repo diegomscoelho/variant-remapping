@@ -26,7 +26,7 @@ process convertVCFToBed {
     #  - add all VCF fields separated by 2 characters pipe and caret (|^) to avoid impacting existing formatting of
     #    the VCF line. The sub replacing percent is to protect the % character that would be interpreted by printf
     #    otherwise. the sub replacing space is to prevent bedtools from using them as a field separator
-    gzip source.vcf.gz | \
+    gunzip -c source.vcf.gz | \
     awk -F '\\t' '{ if (!/^#/){ \
                     printf $1"\\t"$2-1"\\t"$2"\\t"$1; \
                     for (i=2; i<=NF; i++){ gsub(/%/, "%%", $i); gsub(/ /, "£€", $i); printf "|^"$i }; print "\\t"$4}; \
