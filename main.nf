@@ -49,7 +49,7 @@ outfile_dir = file(params.outfile).getParent()
 process filterInputVCF {
 
     input:
-        path "source.vcf"
+        path "source.vcf.gz"
         path "genome_fai"
 
     output:
@@ -61,9 +61,9 @@ process filterInputVCF {
     """
     awk '{ print \$1"\\t1\\t"\$2-1;}' genome_fai > center_regions.bed
     awk '{ print \$1"\\t0\\t1"; print \$1"\\t"\$2-1"\\t"\$2;}' genome_fai > edge_regions.bed
-    bcftools filter --targets-file center_regions.bed -Oz -o kept.vcf.gz source.vcf
+    bcftools filter --targets-file center_regions.bed -Oz -o kept.vcf.gz source.vcf.gz
     zcat kept.vcf.gz | grep -v '^#' | wc -l > all_count.txt
-    bcftools filter --targets-file edge_regions.bed -Oz -o filtered.vcf.gz source.vcf
+    bcftools filter --targets-file edge_regions.bed -Oz -o filtered.vcf.gz source.vcf.gz
     zcat filtered.vcf.gz | grep -v '^#' | wc -l > filtered_count.txt
     cat <(cat *_count.txt | awk '{sum += \$1} END{print "all: "sum}') <(cat filtered_count.txt | awk '{print "filtered: "\$1}') > count.yml
     """
@@ -76,13 +76,13 @@ process filterInputVCF {
 process storeVCFHeader {
 
     input:
-        path "source.vcf"
+        path "source.vcf.gz"
 
     output:
         path "vcf_header.txt", emit: vcf_header
 
     """
-    bcftools view --header-only source.vcf > vcf_header.txt
+    bcftools view --header-only source.vcf.gz > vcf_header.txt
     """
 }
 
