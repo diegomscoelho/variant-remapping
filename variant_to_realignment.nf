@@ -13,7 +13,7 @@ nextflow.enable.dsl=2
 process convertVCFToBed {
 
     input:
-        path "source.vcf"
+        path "source.vcf.gz"
 
     output:
         path "variants.bed", emit: variants_bed
@@ -26,10 +26,11 @@ process convertVCFToBed {
     #  - add all VCF fields separated by 2 characters pipe and caret (|^) to avoid impacting existing formatting of
     #    the VCF line. The sub replacing percent is to protect the % character that would be interpreted by printf
     #    otherwise. the sub replacing space is to prevent bedtools from using them as a field separator
+    gzip source.vcf.gz | \
     awk -F '\\t' '{ if (!/^#/){ \
                     printf $1"\\t"$2-1"\\t"$2"\\t"$1; \
                     for (i=2; i<=NF; i++){ gsub(/%/, "%%", $i); gsub(/ /, "£€", $i); printf "|^"$i }; print "\\t"$4}; \
-                  }' source.vcf \
+                  }' \
                   > variants.bed
     '''
 }
@@ -60,6 +61,9 @@ process flankingRegionBed {
     # Adjust the start position of the flank to be one base downstream of the end of variant (\$5 is the reference allele)
     awk 'BEGIN{OFS="\\t"}{ \$2=\$2+length(\$5); \$3=\$3+length(\$5); print \$0}' variants.bed \
         | bedtools slop  -g genome.chrom.sizes -l 0 -r $flankingseq  > flanking_r2.bed
+
+    # Remove intermediate files
+    rm variants.bed
     """
 }
 
@@ -119,7 +123,12 @@ process extractVariantInfoToFastaHeader {
     paste -d ' \\n' position.txt vcf_fields.txt <(grep -v '^>' variants_read1.fa) > variant_read1.out.fa
     paste -d '\\n' position.txt <(grep -v '^>' variants_read2.fa) > variant_read2.out.fa
 
+    # Remove intermediate files
+    rm vcf_fields.txt
+
     paste variant_read1.out.fa variant_read2.out.fa | paste - - | awk -F "\\t" 'BEGIN {OFS="\\n"} {print $1,$3,$2,$4}' > interleaved.fa
+    # Remove intermediate files
+    rm flanking_r1.bed flanking_r2.bed variants_read1.fa variants_read2.fa
     '''
 }
 
@@ -184,6 +193,7 @@ process alignWithMinimap {
                  -a genome.fa ${reads} | \
                  awk -F '\\t' 'BEGIN{OFS="\\t"}{if(!/^@/){\$NF="vr:Z:"\$NF}; print \$0;}' | \
                  samtools view -bS - > reads_aligned.bam
+        rm ${reads}
         """
     else
         """
@@ -192,6 +202,7 @@ process alignWithMinimap {
                  -a genome.fa ${reads} | \
                  awk -F '\\t' 'BEGIN{OFS="\\t"}{if(!/^@/){\$NF="vr:Z:"\$NF}; print \$0;}' | \
                  samtools view -bS - > reads_aligned.bam
+        rm ${reads}
         """
 }
 
