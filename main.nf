@@ -216,15 +216,17 @@ process combineUnmappedVCF {
         path "merge.vcf.gz", emit: merge_vcf
 
     """
-    set -euxo pipefail
-    if ![ -s variants1.vcf.gz && -s variants.vcf.gz ];
-        echo NULL > merged.vcf.gz
-    elif ![ -s variants1.vcf.gz ];
-        cp variants2.vcf.gz merged.vcf.gz
-    elif ![ -s variants2.vcf.gz ];
-        cp variants1.vcf.gz merged.vcf.gz
-    else
+    if [ -s variants1.vcf.gz ] && [ -s variants2.vcf.gz ]
+    then
         bcftools concat variants1.vcf.gz variants2.vcf.gz -Oz -o merge.vcf.gz
+    elif [ -s variants1.vcf.gz ]
+    then
+        cp variants1.vcf.gz > merge.vcf.gz
+    elif [ -s variants2.vcf.gz ]
+    then
+        cp variants2.vcf.gz > merge.vcf.gz
+    else
+        echo NULL > merge.vcf.gz
     fi
     """
 }
