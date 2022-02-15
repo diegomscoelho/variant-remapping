@@ -42,28 +42,6 @@ outfile_basename = file(params.outfile).getName()
 outfile_basename_without_ext = file(params.outfile).getBaseName()
 outfile_dir = file(params.outfile).getParent()
 
-/*
- * Uncompress VCF file
- */
-process uncompressInputVCF {
-
-    input:
-        path "source.vcf"
-
-    output:
-        path "uncompressed.vcf", emit: vcf_file
-
-    script:
-        if ( file(params.vcffile).getExtension() == 'gz' )
-            """
-            gunzip -c source.vcf > uncompressed.vcf
-            """
-        else
-            """
-            ln -nfs source.vcf uncompressed.vcf
-            """
-}
-
 
 /*
  * filter VCF file to remove variant too close the edges of chromosome because we can't get flanking regions
@@ -292,10 +270,9 @@ workflow process_with_bowtie {
     main:
         prepare_old_genome(params.oldgenome)
         prepare_new_genome_bowtie(params.newgenome)
-        uncompressInputVCF(params.vcffile)
-        storeVCFHeader(uncompressInputVCF.out.vcf_file)
+        storeVCFHeader(params.vcffile)
         process_split_reads_with_bowtie(
-            uncompressInputVCF.out.vcf_file,
+            params.vcffile,
             params.oldgenome,
             prepare_old_genome.out.genome_fai,
             prepare_old_genome.out.genome_chrom_sizes,
@@ -317,9 +294,8 @@ workflow  {
     main:
         prepare_old_genome(params.oldgenome)
         prepare_new_genome(params.newgenome)
-        uncompressInputVCF(params.vcffile)
-        filterInputVCF(uncompressInputVCF.out.vcf_file, prepare_old_genome.out.genome_fai)
-        storeVCFHeader(uncompressInputVCF.out.vcf_file)
+        filterInputVCF(params.vcffile, prepare_old_genome.out.genome_fai)
+        storeVCFHeader(params.vcffile)
         process_split_reads(
             filterInputVCF.out.kept_vcf_file,
             params.oldgenome,
