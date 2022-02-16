@@ -19,9 +19,10 @@ process extractVariantInfoToFastaHeader {
         path "genome.fa"
         path "genome.fa.fai"
         val flankingseq
+        val chunk_size
 
     output:
-        path "interleaved.fa", emit: interleaved_fasta
+        path "read_chunk-*", emit: read_split
 
     script:
     // The Flanking sequence will start/end one base up/downstream  of the variant.
@@ -82,30 +83,14 @@ process extractVariantInfoToFastaHeader {
     
     # Remove intermediate files
     rm variant_read1.out.fa variant_read2.out.fa
+
+    # Split fasta
+    split -a 5 -d -l ${chunk_size * 4} interleaved.fa read_chunk-
+
+    # Remove intermediate files
+    rm interleaved.fa
+
     """
-}
-
-/*
- * Split fasta entries into multiple chunks
- */
-process split_fasta {
-
-    input:
-        path interleaved_fasta
-        val chunk_size
-
-    output:
-        path "read_chunk-*", emit: read_split
-
-    script:
-    if (interleaved_fasta.size() > 0)
-        """
-        split -a 5 -d -l ${chunk_size * 4} ${interleaved_fasta} read_chunk-
-        """
-    else
-        """
-        ln -s ${interleaved_fasta} read_chunk-00001
-        """
 }
 
 /*
@@ -126,14 +111,18 @@ process alignWithMinimap {
         // indexing is done on the fly so get the genome directly
         path "genome.fa"
         val flanklength
+        val filter_align_with_secondary
 
     output:
-        path "reads_aligned.bam", emit: reads_aligned_bam
-
+        path "variants_remapped.vcf", emit: variants_remapped
+        path "variants_unmapped.vcf", emit: variants_unmapped
+        path "summary.yml", emit: summary_yml
 
     script:
-    if (flanklength < 500)
-        """
+    """
+    if [ $flanklength -lt 500 ];
+    then
+
         # Options used by the 'sr' preset with some modifications:
         # -O6,16 instead of -O12,32 --> reduce indel cost
         # -B5 instead of -B10 --> reduce mismatch cost
@@ -146,32 +135,48 @@ process alignWithMinimap {
                  -a genome.fa ${reads} | \
                  awk -F '\\t' 'BEGIN{OFS="\\t"}{if(!/^@/){\$NF="vr:Z:"\$NF}; print \$0;}' | \
                  samtools view -bS - > reads_aligned.bam
-        rm ${reads}
-        """
+
+        samtools sort -n -O BAM -o reads_aligned_name_sorted.bam reads_aligned.bam
+        
+        # Remove temp files
+        rm reads_aligned.bam
+    
     else
-        """
+
         minimap2 -k19 -w19 -A2 -B5 -O6,16 --end-bonus 20 -E3,1 -s200 -z200 -N50 --min-occ-floor=100 \
                  --secondary=yes -N 2 -y \
                  -a genome.fa ${reads} | \
                  awk -F '\\t' 'BEGIN{OFS="\\t"}{if(!/^@/){\$NF="vr:Z:"\$NF}; print \$0;}' | \
                  samtools view -bS - > reads_aligned.bam
-        rm ${reads}
-        """
-}
+        
+        samtools sort -n -O BAM -o reads_aligned_name_sorted.bam reads_aligned.bam
+        
+        # Remove temp files
+        rm reads_aligned.bam
+    fi
 
-/*
- * Sort BAM file by name
- */
-process sortByName {
+    if [ "$filter_align_with_secondary" = "true" ];
+    then
 
-    input:
-        path "reads_aligned.bam"
+        # Ensure that we will use the reads_to_remapped_variants.py from this repo
+        ${baseDir}/variant_remapping_tools/reads_to_remapped_variants.py -i reads_aligned_name_sorted.bam \
+            -o variants_remapped.vcf  --newgenome genome.fa --out_failed_file variants_unmapped.vcf \
+            --flank_length $flanklength --summary summary.yml --filter_align_with_secondary
 
-    output:
-        path "reads_aligned_name_sorted.bam", emit: reads_aligned_sorted_bam
+        # Remove temp files
+        rm reads_aligned_name_sorted.bam
+    
+    else
+    
+        # Ensure that we will use the reads_to_remapped_variants.py from this repo
+        ${baseDir}/variant_remapping_tools/reads_to_remapped_variants.py -i reads*.bam \
+            -o variants_remapped.vcf  --newgenome genome.fa --out_failed_file variants_unmapped.vcf \
+            --flank_length $flanklength --summary summary.yml
 
-    """
-    samtools sort -n -O BAM -o reads_aligned_name_sorted.bam reads_aligned.bam
+        # Remove temp files
+        rm reads_aligned_name_sorted.bam
+
+    fi
     """
 }
 
@@ -201,40 +206,6 @@ process alignWithBowtie {
     """
 }
 
-
-/*
- * Take the reads and process them to get the remapped variants
- */
-process readsToRemappedVariants {
-
-    input:
-        path "reads.bam"
-        path "genome.fa"
-        val flank_length
-        val filter_align_with_secondary
-
-    output:
-        path "variants_remapped.vcf", emit: variants_remapped
-        path "variants_unmapped.vcf", emit: variants_unmapped
-        path "summary.yml", emit: summary_yml
-
-    script:
-        if (filter_align_with_secondary)
-            """
-            # Ensure that we will use the reads_to_remapped_variants.py from this repo
-            ${baseDir}/variant_remapping_tools/reads_to_remapped_variants.py -i reads.bam \
-                -o variants_remapped.vcf  --newgenome genome.fa --out_failed_file variants_unmapped.vcf \
-                --flank_length $flank_length --summary summary.yml --filter_align_with_secondary
-            """
-        else
-            """
-            # Ensure that we will use the reads_to_remapped_variants.py from this repo
-            ${baseDir}/variant_remapping_tools/reads_to_remapped_variants.py -i reads*.bam \
-                -o variants_remapped.vcf  --newgenome genome.fa --out_failed_file variants_unmapped.vcf \
-                --flank_length $flank_length --summary summary.yml
-           """
-}
-
 /*
  * Gather step for remapped and unmapped variants and the summary yaml file
  *
@@ -246,9 +217,9 @@ process merge_variants {
         path "summary*.yml"
 
     output:
-       path "variants_remapped.vcf.gz", emit: variants_remapped
-       path "variants_unmapped.vcf.gz", emit: variants_unmapped
-       path "output_summary.yml", emit: summary_yml
+        path "variants_remapped.vcf.gz", emit: variants_remapped
+        path "variants_unmapped.vcf.gz", emit: variants_unmapped
+        path "output_summary.yml", emit: summary_yml
 
     """
     cat remapped*.vcf > variants_remapped.vcf
@@ -279,30 +250,21 @@ workflow process_split_reads_generic {
             old_genome_chrom_sizes,
             old_genome_fa,
             old_genome_fa_fai,
-            flank_length
-        )
-
-        split_fasta(
-            extractVariantInfoToFastaHeader.out.interleaved_fasta,
+            flank_length,
             chunk_size
         )
 
-
         alignWithMinimap(
-            split_fasta.out.read_split,
+            extractVariantInfoToFastaHeader.out.read_split,
             new_genome_fa,
-            flank_length
+            flank_length,
+            filter_align_with_secondary
         )
-        sortByName(alignWithMinimap.out.reads_aligned_bam)
         // Collect all the bam files in the next step
-        readsToRemappedVariants(
-            sortByName.out.reads_aligned_sorted_bam, new_genome_fa,
-            flank_length, filter_align_with_secondary
-        )
         merge_variants(
-            readsToRemappedVariants.out.variants_remapped.collect(),
-            readsToRemappedVariants.out.variants_unmapped.collect(),
-            readsToRemappedVariants.out.summary_yml.collect()
+            alignWithMinimap.out.variants_remapped.collect(),
+            alignWithMinimap.out.variants_unmapped.collect(),
+            alignWithMinimap.out.summary_yml.collect()
         )
 
     emit:
