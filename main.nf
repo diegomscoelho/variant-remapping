@@ -169,7 +169,6 @@ process generateUnmappedVCF {
     cat original_header.txt > "${outfile_basename_without_ext}_unmapped.vcf"
     gunzip -c unmapped_variants.vcf.gz >> "${outfile_basename_without_ext}_unmapped.vcf"
     bgzip "${outfile_basename_without_ext}_unmapped.vcf"
-    tabix "${outfile_basename_without_ext}_unmapped.vcf.gz"
     """
 }
 
