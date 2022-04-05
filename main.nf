@@ -162,7 +162,6 @@ process generateUnmappedVCF {
 
     output:
         path "${outfile_basename_without_ext}_unmapped.vcf.gz", emit: original_vcf_with_header
-        path "${outfile_basename_without_ext}_unmapped.vcf.gz.tbi", emit: original_vcf_with_header_idx
 
     """
     # Add header to the vcf file:
