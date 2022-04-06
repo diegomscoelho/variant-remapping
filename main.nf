@@ -42,28 +42,6 @@ outfile_basename = file(params.outfile).getName()
 outfile_basename_without_ext = file(params.outfile).getBaseName()
 outfile_dir = file(params.outfile).getParent()
 
-/*
- * Uncompress VCF file
- */
-process uncompressInputVCF {
-
-    input:
-        path "source.vcf"
-
-    output:
-        path "uncompressed.vcf", emit: vcf_file
-
-    script:
-        if ( file(params.vcffile).getExtension() == 'gz' )
-            """
-            gunzip -c source.vcf > uncompressed.vcf
-            """
-        else
-            """
-            ln -nfs source.vcf uncompressed.vcf
-            """
-}
-
 
 /*
  * filter VCF file to remove variant too close the edges of chromosome because we can't get flanking regions
@@ -71,20 +49,22 @@ process uncompressInputVCF {
 process filterInputVCF {
 
     input:
-        path "source.vcf"
+        path "source.vcf.gz"
         path "genome_fai"
 
     output:
-        path "filtered.vcf", emit: filtered_vcf_file
-        path "kept.vcf", emit: kept_vcf_file
+        path "filtered.vcf.gz", emit: filtered_vcf_file
+        path "kept.vcf.gz", emit: kept_vcf_file
         path "count.yml", emit: count_yml
 
     script:
     """
     awk '{ print \$1"\\t1\\t"\$2-1;}' genome_fai > center_regions.bed
     awk '{ print \$1"\\t0\\t1"; print \$1"\\t"\$2-1"\\t"\$2;}' genome_fai > edge_regions.bed
-    bcftools filter --targets-file center_regions.bed source.vcf | tee kept.vcf |  grep -v '^#' | wc -l > all_count.txt
-    bcftools filter --targets-file edge_regions.bed  source.vcf | grep -v '^#' | tee filtered.vcf | wc -l > filtered_count.txt
+    bcftools filter --targets-file center_regions.bed -Oz -o kept.vcf.gz source.vcf.gz
+    zcat kept.vcf.gz | grep -v '^#' | wc -l > all_count.txt
+    bcftools filter --targets-file edge_regions.bed -Oz -o filtered.vcf.gz source.vcf.gz
+    zcat filtered.vcf.gz | grep -v '^#' | wc -l > filtered_count.txt
     cat <(cat *_count.txt | awk '{sum += \$1} END{print "all: "sum}') <(cat filtered_count.txt | awk '{print "filtered: "\$1}') > count.yml
     """
 }
@@ -96,13 +76,13 @@ process filterInputVCF {
 process storeVCFHeader {
 
     input:
-        path "source.vcf"
+        path "source.vcf.gz"
 
     output:
         path "vcf_header.txt", emit: vcf_header
 
     """
-    bcftools view --header-only source.vcf > vcf_header.txt
+    bcftools view --header-only source.vcf.gz > vcf_header.txt
     """
 }
 
@@ -111,20 +91,29 @@ include { process_split_reads; process_split_reads_mid; process_split_reads_long
 
 
 /*
- * This process convert the original Header to the remapped header and concatenate it with the remapped VCF records
+ * This process convert the original Header to the remapped header and
+ * concatenate it with the remapped VCF records
+ * Sort VCF
+ * Run bcftools norm to swap the REF and ALT alleles if the REF doesn't match the new assembly
  */
 process generateRemappedVCF {
 
+    publishDir outfile_dir,
+        overwrite: true,
+        mode: "copy"
+
     input:
         path "vcf_header.txt"
-        path "variants_remapped_sorted.vcf"
+        path "variants_remapped.vcf.gz"
+        path "genome.fa"
 
     output:
-        path "variants_remapped_sorted_with_header.vcf", emit: final_vcf_with_header
+        path "${outfile_basename}", emit: final_output_vcf
+        path "${outfile_basename}.tbi", emit: final_output_vcf_idx
 
     """
     # Create list of contigs/chromosomes to be added to the header
-    cut -f 1 variants_remapped_sorted.vcf | sort -u > contig_names.txt
+    gunzip -c variants_remapped.vcf.gz | cut -f 1 | sort -u > contig_names.txt
     while read CHR; do echo "##contig=<ID=\${CHR}>"; done < contig_names.txt > contigs.txt
     # Add the reference assembly
     echo "##reference=${params.newgenome}" >> contigs.txt
@@ -140,7 +129,21 @@ process generateRemappedVCF {
     # Add the two headers together and add the column names
     cat temp_header.txt contigs.txt > final_header.txt
     tail -n 1 vcf_header.txt >> final_header.txt
-    cat final_header.txt variants_remapped_sorted.vcf > variants_remapped_sorted_with_header.vcf
+    cat final_header.txt > variants_remapped_with_header.vcf
+    gunzip -c variants_remapped.vcf.gz >> variants_remapped_with_header.vcf
+
+    # Sorting VCF
+    bgzip variants_remapped_with_header.vcf
+    bcftools sort -T . -o variants_remapped_sorted.vcf.gz -Oz variants_remapped_with_header.vcf.gz
+
+    rm variants_remapped_with_header.vcf.gz
+
+    # Normalize and tabix output
+    bcftools norm --check-ref e -f genome.fa  variants_remapped_sorted.vcf.gz -o ${outfile_basename} -O v
+    tabix ${outfile_basename}
+
+    rm variants_remapped_sorted.vcf.gz
+
     """
 }
 
@@ -155,31 +158,16 @@ process generateUnmappedVCF {
 
     input:
         path "original_header.txt"
-        path "unmapped_variants.vcf"
+        path "unmapped_variants.vcf.gz"
 
     output:
-        path "${outfile_basename_without_ext}_unmapped.vcf", emit: original_vcf_with_header
+        path "${outfile_basename_without_ext}_unmapped.vcf.gz", emit: original_vcf_with_header
 
     """
     # Add header to the vcf file:
-    cat original_header.txt unmapped_variants.vcf >  "${outfile_basename_without_ext}_unmapped.vcf"
-    """
-}
-
-/*
- * Sort VCF file
- */
-process sortVCF {
-
-    input:
-        path "variants_remapped.vcf"
-
-    output:
-        path "variants_remapped_sorted.vcf.gz", emit: variants_remapped_sorted_gz
-
-    """
-    bgzip variants_remapped.vcf
-    bcftools sort -T . -o variants_remapped_sorted.vcf.gz -Oz variants_remapped.vcf.gz
+    cat original_header.txt > "${outfile_basename_without_ext}_unmapped.vcf"
+    gunzip -c unmapped_variants.vcf.gz >> "${outfile_basename_without_ext}_unmapped.vcf"
+    bgzip "${outfile_basename_without_ext}_unmapped.vcf"
     """
 }
 
@@ -201,6 +189,7 @@ process normaliseAnOutput {
 
     """
     bcftools norm --check-ref e -f genome.fa  variants_remapped_sorted.vcf.gz -o ${outfile_basename} -O v
+    tabix ${outfile_basename}.tbi
     """
 }
 
@@ -229,28 +218,30 @@ process outputStats {
  */
 process combineUnmappedVCF {
     input:
-        path "variants1.vcf"
-        path "variants2.vcf"
+        path "variants1.vcf.gz"
+        path "variants2.vcf.gz"
 
     output:
-        path "merge.vcf", emit: merge_vcf
+        path "merge.vcf.gz", emit: merge_vcf
 
     """
-    cat variants1.vcf variants2.vcf > merge.vcf
+    for variant in variants*.vcf.gz; do gunzip -c \$variant >> merge.vcf ; done
+    bgzip merge.vcf
     """
 }
 
 
 process combineVCF {
     input:
-        path "variants1.vcf"
-        path "variants2.vcf"
-        path "variants3.vcf"
+        path "variants1.vcf.gz"
+        path "variants2.vcf.gz"
+        path "variants3.vcf.gz"
     output:
-        path "merge.vcf", emit: merge_vcf
+        path "merge.vcf.gz", emit: merge_vcf
 
     """
-    cat variants1.vcf variants2.vcf variants3.vcf > merge.vcf
+    for variant in variants*.vcf.gz; do gunzip -c \$variant >> merge.vcf ; done
+    bgzip merge.vcf
     """
 }
 
@@ -280,9 +271,7 @@ workflow finalise {
 
     main:
         generateUnmappedVCF(vcf_header, variants_unmapped)
-        generateRemappedVCF(vcf_header, variants_remapped)
-        sortVCF(generateRemappedVCF.out.final_vcf_with_header)
-        normaliseAnOutput(sortVCF.out.variants_remapped_sorted_gz, genome)
+        generateRemappedVCF(vcf_header, variants_remapped, genome)
         outputStats(summary)
 }
 
@@ -292,10 +281,9 @@ workflow process_with_bowtie {
     main:
         prepare_old_genome(params.oldgenome)
         prepare_new_genome_bowtie(params.newgenome)
-        uncompressInputVCF(params.vcffile)
-        storeVCFHeader(uncompressInputVCF.out.vcf_file)
+        storeVCFHeader(params.vcffile)
         process_split_reads_with_bowtie(
-            uncompressInputVCF.out.vcf_file,
+            params.vcffile,
             params.oldgenome,
             prepare_old_genome.out.genome_fai,
             prepare_old_genome.out.genome_chrom_sizes,
@@ -317,9 +305,8 @@ workflow  {
     main:
         prepare_old_genome(params.oldgenome)
         prepare_new_genome(params.newgenome)
-        uncompressInputVCF(params.vcffile)
-        filterInputVCF(uncompressInputVCF.out.vcf_file, prepare_old_genome.out.genome_fai)
-        storeVCFHeader(uncompressInputVCF.out.vcf_file)
+        filterInputVCF(params.vcffile, prepare_old_genome.out.genome_fai)
+        storeVCFHeader(params.vcffile)
         process_split_reads(
             filterInputVCF.out.kept_vcf_file,
             params.oldgenome,
